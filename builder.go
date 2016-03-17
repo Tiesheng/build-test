@@ -84,17 +84,17 @@ func main() {
 		Github_tag:      Github_tag,
 	}
 
-	BuildImageFromDockerfile(passedParams)
+	BuildImage(passedParams)
 }
 
 //Builds the image in a docker node.
-func BuildImageFromDockerfile(passedParams PassedParams) {
+func BuildImage(passedParams PassedParams) {
 
 	if Validate(passedParams) {
 		BuildPushAndDeleteImage(passedParams)
 	} else {
 		//Params didn't validate.  Bad Request.
-		log.Printf("Insufficient Information.  Must provide at least an Image Name and a Dockerfile/Tarurl.")
+		log.Printf("Insufficient Information. Must provide at least an Image Name and a Dockerfile/Tarurl.")
 		return
 	}
 
