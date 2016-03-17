@@ -19,17 +19,22 @@ import (
 	"strings"
 )
 
+const (
+	APIVersion = "v1.21"
+)
+
 type PassedParams struct {
-	Image_name      string
-	Username        string
-	Password        string
-	Email           string
-	Dockerfile      string
-	Tar_url         string
-	TarFile         []byte
-	Github_username string
-	Github_reponame string
-	Github_tag      string
+	Image_name     string
+	Username       string
+	Password       string
+	Email          string
+	Dockerfile     string
+	Dockerfile_url string
+	Tar_url        string
+	TarFile        []byte
+	GitUsr         string
+	GitRepo        string
+	GitTag         string
 }
 
 type PushAuth struct {
@@ -67,21 +72,23 @@ func main() {
 	Password := os.Getenv("PASSWORD")
 	Email := os.Getenv("EMAIL")
 	Dockerfile := os.Getenv("DOCKERFILE")
+	Dockerfile_url := os.Getenv("DOCKERFILE_URL")
 	Tar_url := os.Getenv("TGZ_URL")
-	Github_username := os.Getenv("GIT_USER")
-	Github_reponame := os.Getenv("GIT_REPO")
-	Github_tag := os.Getenv("GIT_TAG")
+	GitUsr := os.Getenv("GIT_USER")
+	GitRepo := os.Getenv("GIT_REPO")
+	GitTag := os.Getenv("GIT_TAG")
 
 	passedParams := PassedParams{
-		Image_name:      Image_name,
-		Username:        Username,
-		Password:        Password,
-		Email:           Email,
-		Dockerfile:      Dockerfile,
-		Tar_url:         Tar_url,
-		Github_username: Github_username,
-		Github_reponame: Github_reponame,
-		Github_tag:      Github_tag,
+		Image_name:     Image_name,
+		Username:       Username,
+		Password:       Password,
+		Email:          Email,
+		Dockerfile:     Dockerfile,
+		Dockerfile_url: Dockerfile_url,
+		Tar_url:        Tar_url,
+		GitUsr:         GitUsr,
+		GitRepo:        GitRepo,
+		GitTag:         GitTag,
 	}
 
 	BuildImage(passedParams)
@@ -137,6 +144,7 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 		//Breaks when there is nothing left to read.
 		line, err := buildReader.ReadBytes('\r')
 		if err != nil {
+			log.Println(err)
 			break
 		}
 		line = bytes.TrimSpace(line)
@@ -151,7 +159,7 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 			buildLogsSlice := []byte(logsString)
 			buildLogsSlice = append(buildLogsSlice, []byte(stream.ErrorDetail.Message)...)
 			logsString = string(buildLogsSlice)
-			log.Println("logs", logsString)
+			log.Println(logsString)
 
 			CacheBuildError := "Failed: " + stream.ErrorDetail.Message
 
@@ -165,7 +173,7 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 			buildLogsSlice = append(buildLogsSlice, []byte(stream.Stream)...)
 			logsString = string(buildLogsSlice)
 
-			log.Println("logs", logsString)
+			log.Println(logsString)
 		}
 	}
 
@@ -179,8 +187,6 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 	pushReq, err := http.NewRequest("POST", pushUrl, nil)
 	pushReq.Header.Add("X-Registry-Auth", StringEncAuth(passedParams, ServerAddress(splitImageName[0])))
 	pushResponse, err := dockerConnection.Do(pushReq)
-
-	log.Println(pushResponse)
 
 	pushReader := bufio.NewReader(pushResponse.Body)
 	if err != nil {
@@ -206,10 +212,18 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 			pushLogsSlice := []byte(logsString)
 			pushLogsSlice = append(pushLogsSlice, []byte(stream.ErrorDetail.Message)...)
 			logsString = string(pushLogsSlice)
-			log.Println("logs", logsString)
+			log.Println(logsString)
 			CachePushError := "Failed: " + stream.ErrorDetail.Message
 			log.Println("status", CachePushError)
 			return
+		}
+
+		if stream.Stream != "" {
+			pushLogsSlice := []byte(logsString)
+			pushLogsSlice = append(pushLogsSlice, []byte(stream.Stream)...)
+			logsString = string(pushLogsSlice)
+
+			log.Println(logsString)
 		}
 	}
 
@@ -224,9 +238,15 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 }
 
 func Validate(passedParams PassedParams) bool {
+	Dockerfile := passedParams.Dockerfile
+	Dockerfile_url := passedParams.Dockerfile_url
+	Tar_url := passedParams.Tar_url
+	TarFile := passedParams.TarFile
+	GitRepo := passedParams.GitRepo
+
 	//Must have an image name and either a Dockerfile or TarUrl.
 	switch {
-	case passedParams.Dockerfile == "" && passedParams.Tar_url == "" && passedParams.TarFile == nil && passedParams.Github_reponame == "":
+	case Dockerfile == "" && Dockerfile_url == "" && Tar_url == "" && TarFile == nil && GitRepo == "":
 		return false
 	case passedParams.Image_name == "":
 		return false
@@ -305,21 +325,23 @@ func ReaderForInputType(passedParams PassedParams) (io.Reader, error) {
 	switch {
 	case passedParams.Dockerfile != "":
 		return ReaderForDockerfile(passedParams.Dockerfile), nil
+	case passedParams.Dockerfile_url != "":
+		return ReaderForDockerfileUrl(passedParams.Dockerfile_url)
 	case passedParams.TarFile != nil:
 		return bytes.NewReader(passedParams.TarFile), nil
 	case passedParams.Tar_url != "":
 		return ReaderForTarUrl(passedParams.Tar_url)
-	case passedParams.Github_tag != "" && passedParams.Github_username != "" && passedParams.Github_reponame != "":
-		return ReaderForGithubTar(passedParams)
+	case passedParams.GitRepo != "":
+		return ReaderForGitRepo(passedParams)
 	default:
 		return nil, errors.New("Failed in the ReaderForInputType.  Got to default case.")
 	}
 
 }
 
-func ReaderForGithubTar(passedParams PassedParams) (*bytes.Buffer, error) {
+func ReaderForGitRepo(passedParams PassedParams) (*bytes.Buffer, error) {
 
-	url := "https://github.com/" + passedParams.Github_username + "/" + passedParams.Github_reponame + "/archive/" + passedParams.Github_tag + ".tar.gz"
+	url := "https://github.com/" + passedParams.GitUsr + "/" + passedParams.GitRepo + "/archive/" + passedParams.GitTag + ".tar.gz"
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	response, err := client.Do(req)
@@ -342,12 +364,12 @@ func ReaderForGithubTar(passedParams PassedParams) (*bytes.Buffer, error) {
 
 	var folderName string
 	//Name of the folder created by github.  We use for Regex and renaiming.  maybe ^v.+
-	matchedv, err := regexp.MatchString("^v", passedParams.Github_tag)
+	matchedv, err := regexp.MatchString("^v", passedParams.GitTag)
 	if matchedv {
-		githubTagSlice := strings.SplitAfterN(passedParams.Github_tag, "v", 2)
-		folderName = passedParams.Github_reponame + "-" + githubTagSlice[1] + "/"
+		githubTagSlice := strings.SplitAfterN(passedParams.GitTag, "v", 2)
+		folderName = passedParams.GitRepo + "-" + githubTagSlice[1] + "/"
 	} else {
-		folderName = passedParams.Github_reponame + "-" + passedParams.Github_tag + "/"
+		folderName = passedParams.GitRepo + "-" + passedParams.GitTag + "/"
 	}
 
 	//Final buffer will catch our new TarFile
@@ -403,9 +425,26 @@ func ReaderForTarUrl(url string) (io.ReadCloser, error) {
 		return nil, errors.New("Failed response from Tarball Url.")
 	}
 
-	log.Println("Get Tarfile", response.Body)
+	log.Println("Get Tarfile successfully.")
 
 	return response.Body, nil
+}
+
+//URL example = https://github.com/tutumcloud/docker-hello-world/archive/v1.0.tar.gz
+func ReaderForDockerfileUrl(url string) (*bytes.Buffer, error) {
+
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, errors.New("Failed response from Dockerfile Url.")
+	}
+
+	contents, _ := ioutil.ReadAll(response.Body)
+
+	dockerfile := string(contents)
+
+	return ReaderForDockerfile(dockerfile), nil
 }
 
 func ReaderForDockerfile(dockerfile string) *bytes.Buffer {
