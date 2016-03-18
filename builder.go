@@ -212,11 +212,6 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 		log.Println(pushResponse.Status)
 		log.Println(string(contents))
 		return
-	} else {
-		///////////////////////////////////////////////////
-		contents, _ := ioutil.ReadAll(pushResponse.Body)
-		log.Println(string(contents))
-		///////////////////////////////////////////////////
 	}
 
 	pushReader := bufio.NewReader(pushResponse.Body)
