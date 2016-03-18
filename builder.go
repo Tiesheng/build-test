@@ -20,11 +20,13 @@ import (
 )
 
 const (
+	// APIVersion represents docker remote API version.
 	APIVersion = "v1.21"
 )
 
+// PassedParams contains the parameters needed by docker build.
 type PassedParams struct {
-	Image_name     string
+	ImageName      string
 	Username       string
 	Password       string
 	Email          string
@@ -37,6 +39,7 @@ type PassedParams struct {
 	GitTag         string
 }
 
+// PushAuth
 type PushAuth struct {
 	Username      string `json:"username"`
 	Password      string `json:"password"`
@@ -44,30 +47,36 @@ type PushAuth struct {
 	Email         string `json:"email"`
 }
 
-type JobID struct {
-	JobIdentifier string
-}
-
-type JobStatus struct {
-	Status string
-}
-
-type JobLogs struct {
-	Logs string
-}
-
+// StreamCatcher
 type StreamCatcher struct {
 	ErrorDetail ErrorCatcher `json:"errorDetail"`
 	Stream      string       `json:"stream"`
 }
 
+// ErrorCatcher
 type ErrorCatcher struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
 }
 
+// MessageStream
+type MessageStream struct {
+	Error       string `json:"error"`
+	ErrorDetail struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
+	ID             string `json:"id"`
+	Progress       string `json:"progress"`
+	ProgressDetail struct {
+		Current int `json:"current"`
+		Total   int `json:"total"`
+	} `json:"progressDetail"`
+	Status string `json:"status"`
+	Stream string `json:"stream"`
+}
+
 func main() {
-	Image_name := os.Getenv("IMAGE_NAME")
+	ImageName := os.Getenv("IMAGE_NAME")
 	Username := os.Getenv("USERNAME")
 	Password := os.Getenv("PASSWORD")
 	Email := os.Getenv("EMAIL")
@@ -79,7 +88,7 @@ func main() {
 	GitTag := os.Getenv("GIT_TAG")
 
 	passedParams := PassedParams{
-		Image_name:     Image_name,
+		ImageName:      ImageName,
 		Username:       Username,
 		Password:       Password,
 		Email:          Email,
@@ -113,12 +122,12 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 	//Will cut quay.io/ichaboddee/ubuntu into quay.io AND ichaboddee/ubuntu.
 	//If there is no . in it, then splitImageName[0-1] will be nil.  Code relies on that for logic later.
 	splitImageName := make([]string, 2)
-	if strings.Contains(passedParams.Image_name, ".") {
-		splitImageName = strings.SplitN(passedParams.Image_name, "/", 2)
+	if strings.Contains(passedParams.ImageName, ".") {
+		splitImageName = strings.SplitN(passedParams.ImageName, "/", 2)
 	}
 
 	//Create the post request to build.  Query Param t=image name is the tag.
-	buildUrl := ("/v1.21/build?nocache=true&t=" + passedParams.Image_name)
+	buildUrl := ("/v1.21/build?nocache=true&t=" + passedParams.ImageName)
 
 	//Open connection to docker and build.  The request will depend on whether a dockerfile was passed or a url to a zip.
 	dockerDial := Dial()
@@ -128,6 +137,9 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 		log.Println(err)
 		return
 	}
+
+	log.Println("Status", "Building")
+
 	buildReq, err := http.NewRequest("POST", buildUrl, readerForInput)
 	buildResponse, err := dockerConnection.Do(buildReq)
 
@@ -144,7 +156,6 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 		//Breaks when there is nothing left to read.
 		line, err := buildReader.ReadBytes('\r')
 		if err != nil {
-			log.Println(err)
 			break
 		}
 		line = bytes.TrimSpace(line)
@@ -159,11 +170,12 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 			buildLogsSlice := []byte(logsString)
 			buildLogsSlice = append(buildLogsSlice, []byte(stream.ErrorDetail.Message)...)
 			logsString = string(buildLogsSlice)
-			log.Println(logsString)
+
+			log.Println("Build log:\n", logsString)
 
 			CacheBuildError := "Failed: " + stream.ErrorDetail.Message
 
-			log.Println("status", CacheBuildError)
+			log.Println("Build error:\n", CacheBuildError)
 
 			return
 		}
@@ -172,17 +184,16 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 			buildLogsSlice := []byte(logsString)
 			buildLogsSlice = append(buildLogsSlice, []byte(stream.Stream)...)
 			logsString = string(buildLogsSlice)
-
-			log.Println(logsString)
 		}
 	}
 
-	log.Println("Build successfully, push will execute!")
+	log.Println("Build log:\n", logsString)
+	log.Println("Build successfully, push start!")
 
 	//Update status in the cache, then start the push process.
-	log.Println("status", "Pushing")
+	log.Println("Status", "Pushing")
 
-	pushUrl := ("/images/" + passedParams.Image_name + "/push")
+	pushUrl := ("/images/" + passedParams.ImageName + "/push")
 	// pushConnection := httputil.NewClientConn(dockerDial, nil)
 	pushReq, err := http.NewRequest("POST", pushUrl, nil)
 	pushReq.Header.Add("X-Registry-Auth", StringEncAuth(passedParams, ServerAddress(splitImageName[0])))
@@ -190,10 +201,11 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 
 	pushReader := bufio.NewReader(pushResponse.Body)
 	if err != nil {
-		log.Println("status", err)
+		log.Println("Status", err)
 		return
 	}
 
+	var logsStringPush string
 	//Loop through.  Only concerned with catching the error.  Append it to logsString if it exists.
 	for {
 		//Breaks when there is nothing left to read.
@@ -204,34 +216,52 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 		line = bytes.TrimSpace(line)
 
 		//Unmarshal the json in to my structure.
-		var stream StreamCatcher
+		var stream MessageStream
 		err = json.Unmarshal(line, &stream)
 
 		//This if catches the error from docker and puts it in logs and status in the cache, then fails.
 		if stream.ErrorDetail.Message != "" {
-			pushLogsSlice := []byte(logsString)
+			pushLogsSlice := []byte(logsStringPush)
 			pushLogsSlice = append(pushLogsSlice, []byte(stream.ErrorDetail.Message)...)
-			logsString = string(pushLogsSlice)
-			log.Println(logsString)
+			logsStringPush = string(pushLogsSlice)
+			log.Println("Push log:\n", logsStringPush)
 			CachePushError := "Failed: " + stream.ErrorDetail.Message
-			log.Println("status", CachePushError)
+			log.Println("Push error:\n", CachePushError)
 			return
 		}
 
-		if stream.Stream != "" {
-			pushLogsSlice := []byte(logsString)
-			pushLogsSlice = append(pushLogsSlice, []byte(stream.Stream)...)
-			logsString = string(pushLogsSlice)
+		if stream.ID != "" {
+			pushLogsSlice := []byte(logsStringPush)
+			pushLogsSlice = append(pushLogsSlice, []byte(stream.ID)...)
+			logsStringPush = string(pushLogsSlice)
+		}
 
-			log.Println(logsString)
+		if stream.Progress != "" {
+			pushLogsSlice := []byte(logsStringPush)
+			pushLogsSlice = append(pushLogsSlice, []byte(stream.Progress)...)
+			logsStringPush = string(pushLogsSlice)
+		}
+
+		if stream.Status != "" {
+			pushLogsSlice := []byte(logsStringPush)
+			pushLogsSlice = append(pushLogsSlice, []byte(stream.Status)...)
+			logsStringPush = string(pushLogsSlice)
+		}
+
+		if stream.Stream != "" {
+			pushLogsSlice := []byte(logsStringPush)
+			pushLogsSlice = append(pushLogsSlice, []byte(stream.Stream)...)
+			logsStringPush = string(pushLogsSlice)
 		}
 	}
 
+	log.Println("Push log:\n", logsStringPush)
+
 	//Finished.  Update status in the cache and close.
-	log.Println("status", "Finished")
+	log.Println("Status", "Finished")
 
 	//Delete it from the docker node.  Save space.
-	deleteUrl := ("/v1.21/images/" + passedParams.Image_name)
+	deleteUrl := ("/v1.21/images/" + passedParams.ImageName)
 	deleteReq, err := http.NewRequest("DELETE", deleteUrl, nil)
 	dockerConnection.Do(deleteReq)
 	dockerConnection.Close()
@@ -248,7 +278,7 @@ func Validate(passedParams PassedParams) bool {
 	switch {
 	case Dockerfile == "" && Dockerfile_url == "" && Tar_url == "" && TarFile == nil && GitRepo == "":
 		return false
-	case passedParams.Image_name == "":
+	case passedParams.ImageName == "":
 		return false
 	default:
 		return true
