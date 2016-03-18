@@ -26,20 +26,20 @@ const (
 
 // PassedParams contains the parameters needed by docker build.
 type PassedParams struct {
-	ImageName      string
-	Username       string
-	Password       string
-	Email          string
-	Dockerfile     string
-	Dockerfile_url string
-	Tar_url        string
-	TarFile        []byte
-	GitUsr         string
-	GitRepo        string
-	GitTag         string
+	ImageName     string
+	Username      string
+	Password      string
+	Email         string
+	Dockerfile    string
+	DockerfileURL string
+	TarURL        string
+	TarFile       []byte
+	GitUsr        string
+	GitRepo       string
+	GitTag        string
 }
 
-// PushAuth
+// PushAuth ...
 type PushAuth struct {
 	Username      string `json:"username"`
 	Password      string `json:"password"`
@@ -47,19 +47,19 @@ type PushAuth struct {
 	Email         string `json:"email"`
 }
 
-// StreamCatcher
+// StreamCatcher ...
 type StreamCatcher struct {
 	ErrorDetail ErrorCatcher `json:"errorDetail"`
 	Stream      string       `json:"stream"`
 }
 
-// ErrorCatcher
+// ErrorCatcher ...
 type ErrorCatcher struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
 }
 
-// MessageStream
+// MessageStream ...
 type MessageStream struct {
 	Error       string `json:"error"`
 	ErrorDetail struct {
@@ -81,29 +81,29 @@ func main() {
 	Password := os.Getenv("PASSWORD")
 	Email := os.Getenv("EMAIL")
 	Dockerfile := os.Getenv("DOCKERFILE")
-	Dockerfile_url := os.Getenv("DOCKERFILE_URL")
-	Tar_url := os.Getenv("TGZ_URL")
+	DockerfileURL := os.Getenv("DOCKERFILE_URL")
+	TarURL := os.Getenv("TGZ_URL")
 	GitUsr := os.Getenv("GIT_USER")
 	GitRepo := os.Getenv("GIT_REPO")
 	GitTag := os.Getenv("GIT_TAG")
 
 	passedParams := PassedParams{
-		ImageName:      ImageName,
-		Username:       Username,
-		Password:       Password,
-		Email:          Email,
-		Dockerfile:     Dockerfile,
-		Dockerfile_url: Dockerfile_url,
-		Tar_url:        Tar_url,
-		GitUsr:         GitUsr,
-		GitRepo:        GitRepo,
-		GitTag:         GitTag,
+		ImageName:     ImageName,
+		Username:      Username,
+		Password:      Password,
+		Email:         Email,
+		Dockerfile:    Dockerfile,
+		DockerfileURL: DockerfileURL,
+		TarURL:        TarURL,
+		GitUsr:        GitUsr,
+		GitRepo:       GitRepo,
+		GitTag:        GitTag,
 	}
 
 	BuildImage(passedParams)
 }
 
-//Builds the image in a docker node.
+//BuildImage builds the image in a docker node.
 func BuildImage(passedParams PassedParams) {
 
 	if Validate(passedParams) {
@@ -116,6 +116,7 @@ func BuildImage(passedParams PassedParams) {
 
 }
 
+// BuildPushAndDeleteImage ...
 func BuildPushAndDeleteImage(passedParams PassedParams) {
 
 	//Parse the image name if it has a . in it.  Differentiate between private and docker repos.
@@ -127,7 +128,7 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 	}
 
 	//Create the post request to build.  Query Param t=image name is the tag.
-	buildUrl := ("/v1.21/build?nocache=true&t=" + passedParams.ImageName)
+	buildURL := ("/v1.21/build?nocache=true&t=" + passedParams.ImageName)
 
 	//Open connection to docker and build.  The request will depend on whether a dockerfile was passed or a url to a zip.
 	dockerDial := Dial()
@@ -140,8 +141,15 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 
 	log.Println("Status", "Building")
 
-	buildReq, err := http.NewRequest("POST", buildUrl, readerForInput)
+	buildReq, err := http.NewRequest("POST", buildURL, readerForInput)
 	buildResponse, err := dockerConnection.Do(buildReq)
+
+	if buildResponse.Status != "200 OK" {
+		contents, _ := ioutil.ReadAll(buildResponse.Body)
+		log.Println(buildResponse.Status)
+		log.Println(string(contents))
+		return
+	}
 
 	defer buildResponse.Body.Close()
 	buildReader := bufio.NewReader(buildResponse.Body)
@@ -193,11 +201,23 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 	//Update status in the cache, then start the push process.
 	log.Println("Status", "Pushing")
 
-	pushUrl := ("/images/" + passedParams.ImageName + "/push")
+	pushURL := ("/images/" + passedParams.ImageName + "/push")
 	// pushConnection := httputil.NewClientConn(dockerDial, nil)
-	pushReq, err := http.NewRequest("POST", pushUrl, nil)
+	pushReq, err := http.NewRequest("POST", pushURL, nil)
 	pushReq.Header.Add("X-Registry-Auth", StringEncAuth(passedParams, ServerAddress(splitImageName[0])))
 	pushResponse, err := dockerConnection.Do(pushReq)
+
+	if pushResponse.Status != "200 OK" {
+		contents, _ := ioutil.ReadAll(pushResponse.Body)
+		log.Println(pushResponse.Status)
+		log.Println(string(contents))
+		return
+	} else {
+		///////////////////////////////////////////////////
+		contents, _ := ioutil.ReadAll(pushResponse.Body)
+		log.Println(string(contents))
+		///////////////////////////////////////////////////
+	}
 
 	pushReader := bufio.NewReader(pushResponse.Body)
 	if err != nil {
@@ -261,22 +281,23 @@ func BuildPushAndDeleteImage(passedParams PassedParams) {
 	log.Println("Status", "Finished")
 
 	//Delete it from the docker node.  Save space.
-	deleteUrl := ("/v1.21/images/" + passedParams.ImageName)
-	deleteReq, err := http.NewRequest("DELETE", deleteUrl, nil)
+	deleteURL := ("/v1.21/images/" + passedParams.ImageName)
+	deleteReq, err := http.NewRequest("DELETE", deleteURL, nil)
 	dockerConnection.Do(deleteReq)
 	dockerConnection.Close()
 }
 
+// Validate ...
 func Validate(passedParams PassedParams) bool {
 	Dockerfile := passedParams.Dockerfile
-	Dockerfile_url := passedParams.Dockerfile_url
-	Tar_url := passedParams.Tar_url
+	DockerfileURL := passedParams.DockerfileURL
+	TarURL := passedParams.TarURL
 	TarFile := passedParams.TarFile
 	GitRepo := passedParams.GitRepo
 
 	//Must have an image name and either a Dockerfile or TarUrl.
 	switch {
-	case Dockerfile == "" && Dockerfile_url == "" && Tar_url == "" && TarFile == nil && GitRepo == "":
+	case Dockerfile == "" && DockerfileURL == "" && TarURL == "" && TarFile == nil && GitRepo == "":
 		return false
 	case passedParams.ImageName == "":
 		return false
@@ -285,7 +306,7 @@ func Validate(passedParams PassedParams) bool {
 	}
 }
 
-//String encode the info required for X-AUTH.  Username, Password, Email, Serveraddress.
+//StringEncAuth encode the info required for X-AUTH.  Username, Password, Email, Serveraddress.
 func StringEncAuth(passedParams PassedParams, serveraddress string) string {
 	//Encoder the needed data to pass as the X-RegistryAuth Header
 	var data PushAuth
@@ -302,32 +323,33 @@ func StringEncAuth(passedParams PassedParams, serveraddress string) string {
 	return sEnc
 }
 
-//Essentially docker_node := os.Getenv("DOCKER_NODE") | default_node
+//DockerNode ...
 func DockerNode() string {
 
-	var docker_node string
+	var dockernode string
 	if os.Getenv("DOCKER_HOST") != "" {
-		docker_node = os.Getenv("DOCKER_HOST")
+		dockernode = os.Getenv("DOCKER_HOST")
 	} else {
-		docker_node = "http://127.0.0.1:4243"
+		dockernode = "http://127.0.0.1:4243"
 	}
-	return docker_node
+	return dockernode
 }
 
+// Dial ...
 func Dial() net.Conn {
-	var docker_proto string
-	var docker_host string
+	var dockerProto string
+	var dockerHost string
 	if os.Getenv("DOCKER_HOST") != "" {
-		dockerHost := os.Getenv("DOCKER_HOST")
-		splitStrings := strings.SplitN(dockerHost, "://", 2)
-		docker_proto = splitStrings[0]
-		docker_host = splitStrings[1]
+		host := os.Getenv("DOCKER_HOST")
+		splitStrings := strings.SplitN(host, "://", 2)
+		dockerProto = splitStrings[0]
+		dockerHost = splitStrings[1]
 	} else {
-		docker_proto = "tcp"
-		docker_host = "localhost:4243"
+		dockerProto = "tcp"
+		dockerHost = "localhost:4243"
 	}
 
-	dockerDial, err := net.Dial(docker_proto, docker_host)
+	dockerDial, err := net.Dial(dockerProto, dockerHost)
 	if err != nil {
 		log.Println("Failed to reach docker")
 		log.Fatal(err)
@@ -335,6 +357,7 @@ func Dial() net.Conn {
 	return dockerDial
 }
 
+// ServerAddress ...
 func ServerAddress(privateRepo string) string {
 
 	//The server address is different for a private repo.
@@ -348,19 +371,19 @@ func ServerAddress(privateRepo string) string {
 
 }
 
-//Reader will read from either the zip made from the dockerfile passed in or the zip from the url passed in.
+//ReaderForInputType will read from either the zip made from the dockerfile passed in or the zip from the url passed in.
 func ReaderForInputType(passedParams PassedParams) (io.Reader, error) {
 
 	//Use a switch.  one case for Dockerfile, one for TarUrl, one for Tarfile from client?
 	switch {
 	case passedParams.Dockerfile != "":
 		return ReaderForDockerfile(passedParams.Dockerfile), nil
-	case passedParams.Dockerfile_url != "":
-		return ReaderForDockerfileUrl(passedParams.Dockerfile_url)
+	case passedParams.DockerfileURL != "":
+		return ReaderForDockerfileURL(passedParams.DockerfileURL)
 	case passedParams.TarFile != nil:
 		return bytes.NewReader(passedParams.TarFile), nil
-	case passedParams.Tar_url != "":
-		return ReaderForTarUrl(passedParams.Tar_url)
+	case passedParams.TarURL != "":
+		return ReaderForTarURL(passedParams.TarURL)
 	case passedParams.GitRepo != "":
 		return ReaderForGitRepo(passedParams)
 	default:
@@ -369,6 +392,7 @@ func ReaderForInputType(passedParams PassedParams) (io.Reader, error) {
 
 }
 
+// ReaderForGitRepo ...
 func ReaderForGitRepo(passedParams PassedParams) (*bytes.Buffer, error) {
 
 	url := "https://github.com/" + passedParams.GitUsr + "/" + passedParams.GitRepo + "/archive/" + passedParams.GitTag + ".tar.gz"
@@ -445,8 +469,8 @@ func ReaderForGitRepo(passedParams PassedParams) (*bytes.Buffer, error) {
 	return finalBuffer, nil
 }
 
-//URL example = https://github.com/tutumcloud/docker-hello-world/archive/v1.0.tar.gz
-func ReaderForTarUrl(url string) (io.ReadCloser, error) {
+// ReaderForTarURL example = https://github.com/tutumcloud/docker-hello-world/archive/v1.0.tar.gz
+func ReaderForTarURL(url string) (io.ReadCloser, error) {
 
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
@@ -460,8 +484,8 @@ func ReaderForTarUrl(url string) (io.ReadCloser, error) {
 	return response.Body, nil
 }
 
-//URL example = https://github.com/tutumcloud/docker-hello-world/archive/v1.0.tar.gz
-func ReaderForDockerfileUrl(url string) (*bytes.Buffer, error) {
+// ReaderForDockerfileURL example = https://github.com/tutumcloud/docker-hello-world/archive/v1.0.tar.gz
+func ReaderForDockerfileURL(url string) (*bytes.Buffer, error) {
 
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
@@ -477,6 +501,7 @@ func ReaderForDockerfileUrl(url string) (*bytes.Buffer, error) {
 	return ReaderForDockerfile(dockerfile), nil
 }
 
+// ReaderForDockerfile ...
 func ReaderForDockerfile(dockerfile string) *bytes.Buffer {
 
 	// Create a buffer to write our archive to.
