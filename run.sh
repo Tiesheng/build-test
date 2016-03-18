@@ -1,9 +1,6 @@
 #!/bin/bash
 set -e
 
-# Ensure that all nodes in /dev/mapper correspond to mapped devices currently loaded by the device-mapper kernel driver
-dmsetup mknodes
-
 # Now, close extraneous file descriptors.
 pushd /proc/self/fd >/dev/null
 for FD in *
@@ -26,7 +23,6 @@ print_msg() {
 }
 
 run_docker() {
-	udevd --daemon
 	print_msg "=> Starting docker"
 	docker daemon \
 		--host=unix:///var/run/docker.sock \
