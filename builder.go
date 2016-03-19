@@ -107,7 +107,7 @@ func main() {
 func BuildImage(passedParams PassedParams) {
 
 	if Validate(passedParams) {
-		BuildPushAndDeleteImage(passedParams)
+		BuildPushImageProcess(passedParams)
 	} else {
 		//Params didn't validate.  Bad Request.
 		log.Printf("Insufficient Information. Must provide at least an Image Name and a Dockerfile/Tarurl.")
@@ -116,8 +116,8 @@ func BuildImage(passedParams PassedParams) {
 
 }
 
-// BuildPushAndDeleteImage ...
-func BuildPushAndDeleteImage(passedParams PassedParams) {
+// BuildPushImageProcess ...
+func BuildPushImageProcess(passedParams PassedParams) {
 
 	//Parse the image name if it has a . in it.  Differentiate between private and docker repos.
 	//Will cut quay.io/ichaboddee/ubuntu into quay.io AND ichaboddee/ubuntu.
