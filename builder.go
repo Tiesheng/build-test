@@ -128,7 +128,7 @@ func BuildPushImageProcess(passedParams PassedParams) {
 	}
 
 	//Create the post request to build.  Query Param t=image name is the tag.
-	buildURL := ("/v1.21/build?nocache=true&t=" + passedParams.ImageName)
+	buildURL := ("/" + APIVersion + "/build?nocache=true&t=" + passedParams.ImageName)
 
 	//Open connection to docker and build.  The request will depend on whether a dockerfile was passed or a url to a zip.
 	dockerDial := Dial()
@@ -276,7 +276,7 @@ func BuildPushImageProcess(passedParams PassedParams) {
 	log.Println("Status", "Finished")
 
 	//Delete it from the docker node.  Save space.
-	deleteURL := ("/v1.21/images/" + passedParams.ImageName)
+	deleteURL := ("/" + APIVersion + "/images/" + passedParams.ImageName)
 	deleteReq, err := http.NewRequest("DELETE", deleteURL, nil)
 	dockerConnection.Do(deleteReq)
 	dockerConnection.Close()
