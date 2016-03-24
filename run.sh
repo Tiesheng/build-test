@@ -1,6 +1,69 @@
 #!/bin/bash
 set -e
 
+# First, make sure that cgroups are mounted correctly.
+CGROUP=/sys/fs/cgroup
+: {LOG:=stdio}
+
+[ -d $CGROUP ] ||
+	mkdir $CGROUP
+
+mountpoint -q $CGROUP ||
+	mount -n -t tmpfs -o uid=0,gid=0,mode=0755 cgroup $CGROUP || {
+		echo "Could not make a tmpfs mount. Did you use --privileged?"
+		exit 1
+	}
+
+if [ -d /sys/kernel/security ] && ! mountpoint -q /sys/kernel/security
+then
+    mount -t securityfs none /sys/kernel/security || {
+        echo "Could not mount /sys/kernel/security."
+        echo "AppArmor detection and --privileged mode might break."
+    }
+fi
+
+# Mount the cgroup hierarchies exactly as they are in the parent system.
+for SUBSYS in $(cut -d: -f2 /proc/1/cgroup)
+do
+        [ -d $CGROUP/$SUBSYS ] || mkdir $CGROUP/$SUBSYS
+        mountpoint -q $CGROUP/$SUBSYS ||
+                mount -n -t cgroup -o $SUBSYS cgroup $CGROUP/$SUBSYS
+
+        # The two following sections address a bug which manifests itself
+        # by a cryptic "lxc-start: no ns_cgroup option specified" when
+        # trying to start containers withina container.
+        # The bug seems to appear when the cgroup hierarchies are not
+        # mounted on the exact same directories in the host, and in the
+        # container.
+
+        # Named, control-less cgroups are mounted with "-o name=foo"
+        # (and appear as such under /proc/<pid>/cgroup) but are usually
+        # mounted on a directory named "foo" (without the "name=" prefix).
+        # Systemd and OpenRC (and possibly others) both create such a
+        # cgroup. To avoid the aforementioned bug, we symlink "foo" to
+        # "name=foo". This shouldn't have any adverse effect.
+        echo $SUBSYS | grep -q ^name= && {
+                NAME=$(echo $SUBSYS | sed s/^name=//)
+                ln -s $SUBSYS $CGROUP/$NAME
+        }
+
+        # Likewise, on at least one system, it has been reported that
+        # systemd would mount the CPU and CPU accounting controllers
+        # (respectively "cpu" and "cpuacct") with "-o cpuacct,cpu"
+        # but on a directory called "cpu,cpuacct" (note the inversion
+        # in the order of the groups). This tries to work around it.
+        [ $SUBSYS = cpuacct,cpu ] && ln -s $SUBSYS $CGROUP/cpu,cpuacct
+done
+
+# Note: as I write those lines, the LXC userland tools cannot setup
+# a "sub-container" properly if the "devices" cgroup is not in its
+# own hierarchy. Let's detect this and issue a warning.
+grep -q :devices: /proc/1/cgroup ||
+	echo "WARNING: the 'devices' cgroup should be in its own hierarchy."
+grep -qw devices /proc/1/cgroup ||
+	echo "WARNING: it looks like the 'devices' cgroup is not mounted."
+
+
 # Now, close extraneous file descriptors.
 pushd /proc/self/fd >/dev/null
 for FD in *
@@ -40,41 +103,6 @@ run_docker() {
 	done
 }
 
-#
-# Start docker-in-docker or use an external docker daemon via mounted socket
-#
-DOCKER_USED=""
-EXTERNAL_DOCKER=no
-MOUNTED_DOCKER_FOLDER=no
-if [ -S /var/run/docker.sock ]; then
-	print_msg "=> Detected unix socket at /var/run/docker.sock"
-	print_msg "=> Testing if docker version matches"
-	if ! docker version > /dev/null 2>&1 ; then
-		export DOCKER_VERSION=$(cat version_list | grep -P "^$(docker version 2>&1 > /dev/null | grep -iF "client and server don't have same version" | grep -oP 'server: *\d*\.\d*' | grep -oP '\d*\.\d*') .*$" | cut -d " " -f2)
-		if [ "${DOCKER_VERSION}" != "" ]; then
-			print_msg "=> Downloading docker ${DOCKER_VERSION}"
-			curl -o /usr/bin/docker https://get.docker.com/builds/Linux/x86_64/docker-${DOCKER_VERSION}
-		fi
-	fi
-	docker version > /dev/null 2>&1 || { print_msg "   Failed to connect to docker daemon at /var/run/docker.sock" && exit 1; }
-	EXTERNAL_DOCKER=yes
-	DOCKER_USED="Using external docker ${DOCKER_VERSION} mounted at /var/run/docker.sock"
-    export DOCKER_USED=${DOCKER_USED}
-    export EXTERNAL_DOCKER=${EXTERNAL_DOCKER}
-    export MOUNTED_DOCKER_FOLDER=${MOUNTED_DOCKER_FOLDER}
-    /build.sh "$@"
-else
-	DOCKER_USED="Using docker-in-docker ${DOCKER_VERSION}"
-	if [ "$(ls -A /var/lib/docker)" ]; then
-		print_msg "=> Detected pre-existing /var/lib/docker folder"
-		MOUNTED_DOCKER_FOLDER=yes
-		DOCKER_USED="Using docker-in-docker with an external /var/lib/docker folder"
-	fi
-    export DOCKER_USED=${DOCKER_USED}
-    export EXTERNAL_DOCKER=${EXTERNAL_DOCKER}
-    export MOUNTED_DOCKER_FOLDER=${MOUNTED_DOCKER_FOLDER}
-    export DOCKER_HOST=unix:///var/run/docker.sock
-    export IMAGE_NAME=${IMAGE_NAME:-$1}
-    run_docker
-    builder "$@"
-fi
+export DOCKER_HOST=unix:///var/run/docker.sock
+run_docker
+builder "$@"
