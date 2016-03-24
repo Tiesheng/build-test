@@ -101,6 +101,7 @@ run_docker() {
 		sleep 1
 		docker version > /dev/null 2>&1 && break
 	done
+	print_msg "=> Start docker daemon successfully"
 }
 
 export DOCKER_HOST=unix:///var/run/docker.sock
